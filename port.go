@@ -1,4 +1,4 @@
-package uart
+package debug_uart
 
 import (
 	"log"
