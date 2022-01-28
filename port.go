@@ -3,6 +3,7 @@ package debug_uart
 import (
 	"encoding/binary"
 	"log"
+
 	"time"
 
 	"golang.org/x/sys/windows/registry"
@@ -15,6 +16,7 @@ type Uart struct {
 	holdingRegisters []uint16
 	Started          bool
 	Stopped          bool
+	Order            bool
 	state            byte
 	error            byte
 }
@@ -22,17 +24,14 @@ type Uart struct {
 func Make() *Uart {
 
 	uart := &Uart{}
+	uart.holdingRegisters = make([]uint16, 10)
 	return uart
 }
 
 func (uart *Uart) Listen(name string) error {
-	c := &serial.Config{Name: name, Baud: 115200}
+	c := &serial.Config{Name: name, Baud: 115200, ReadTimeout: time.Millisecond * 500}
 	var err error
 	uart.port, err = serial.OpenPort(c)
-
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
 
 	return err
 }
@@ -41,122 +40,65 @@ func (uart *Uart) Close() {
 	uart.port.Close()
 }
 
-func (uart *Uart) Start() bool {
-
-	if uart.Started {
-		return true
-	}
+func (uart *Uart) Start() {
 
 	var packet = []byte{'R', '1', '0', 255}
+	uart.port.Write(packet)
 
-	n, err := uart.port.Write(packet)
-	// log.Printf("%q", packet[:n])
-	if err != nil {
-		log.Fatal(err)
-	}
+	time.Sleep(10 * time.Millisecond)
 
-	time.Sleep(100 * time.Millisecond)
-
-	packet = nil
-	packet = []byte{'S', 't', '0', 255}
-	n, err = uart.port.Write(packet)
-	// log.Printf("%q", packet[:n])
-	if err != nil || n == 0 {
-		log.Fatal(err)
-	}
-
-	answer := make([]byte, 127)
-	n1, err1 := uart.port.Read(answer)
-	// log.Println(n)
-	if err1 != nil || n1 == 0 {
-		log.Fatal(err)
-	}
-	// time.Sleep(10 * time.Millisecond)
-	// log.Println(n1)
-	// log.Printf("%q", answer[:n1])
-
-	uart.Started = (answer[3] == 66)
+	uart.Started = true
 	uart.Stopped = false
-
-	return uart.Started
-
 }
 
-func (uart *Uart) Stop() bool {
-	if uart.Stopped {
-		return true
-	}
+func (uart *Uart) Stop() {
 
 	var packet = []byte{'R', '0', 255}
-	n, err := uart.port.Write(packet)
-	// log.Printf("%q", packet[:n])
-	if err != nil {
-		log.Fatal(err)
-	}
+	uart.port.Write(packet)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
-	packet = nil
-	packet = []byte{'S', 't', '0', 255}
-	n, err = uart.port.Write(packet)
-	// log.Printf("%q", packet[:n])
-	if err != nil || n == 0 {
-		log.Fatal(err)
-	}
-
-	answer := make([]byte, 127)
-	n1, err1 := uart.port.Read(answer)
-	// log.Println(n)
-	if err1 != nil || n1 == 0 {
-		log.Fatal(err)
-	}
-	// time.Sleep(10 * time.Millisecond)
-	// log.Println(n1)
-	// log.Printf("%q", answer[:n1])
-
-	uart.Stopped = (answer[3] == 0)
+	uart.Stopped = true
 	uart.Started = false
-
-	return uart.Stopped
 }
 
 func (uart *Uart) GetData() []uint16 {
 
-	// time.Sleep(30 * time.Millisecond)
-
+	answer := make([]byte, 25)
 	var packet = []byte{'C', 'V', '0', 255}
 	uart.port.Write(packet)
-
-	answer := make([]byte, 127)
+	time.Sleep(10 * time.Millisecond)
 	uart.port.Read(answer)
-	if answer[0] == packet[0] && answer[1] == packet[1] {
+	if answer[0] == packet[0] && answer[1] == 'v' && answer[23] == 255 {
 		uart.holdingRegisters = bytesToUint16(answer[3:23])
 	}
 	return uart.holdingRegisters
 }
 
+func (uart *Uart) Get(packet []byte) {
+	answer := make([]byte, 5)
+	uart.port.Write(packet)
+	time.Sleep(10 * time.Millisecond)
+	uart.port.Read(answer)
+	if answer[0] == 'S' && answer[1] == 't' && answer[4] == 255 {
+		uart.state = answer[3]
+	}
+	if answer[0] == 'E' && answer[1] == 'r' && answer[4] == 255 {
+		uart.error = answer[3]
+	}
+}
+
 func (uart *Uart) GetState() byte {
 
 	var packet = []byte{'S', 't', '0', 255}
-	uart.port.Write(packet)
-
-	answer := make([]byte, 5)
-	uart.port.Read(answer)
-	if answer[0] == packet[0] && answer[1] == packet[1] {
-		uart.state = answer[3]
-	}
+	uart.Get(packet)
 	return uart.state
 }
 
 func (uart *Uart) GetError() byte {
-	var packet = []byte{'E', 'r', '0', 255}
-	uart.port.Write(packet)
 
-	answer := make([]byte, 5)
-	uart.port.Read(answer)
-	if answer[0] == packet[0] && answer[1] == packet[1] {
-		uart.error = answer[3]
-	}
+	var packet = []byte{'E', 'r', '0', 255}
+	uart.Get(packet)
 	return uart.error
 }
 
@@ -182,8 +124,6 @@ func GetPort() []string {
 		log.Fatal(err)
 	}
 
-	// fmt.Printf("Subkey %d ValueCount %d\n", ki.SubKeyCount, ki.ValueCount)
-
 	s, err := k.ReadValueNames(int(ki.ValueCount))
 	if err != nil {
 		log.Fatal(err)
@@ -199,6 +139,4 @@ func GetPort() []string {
 	}
 
 	return kvalue
-
-	// fmt.Printf("%s \n", kvalue)
 }
